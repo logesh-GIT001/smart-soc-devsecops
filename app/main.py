@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Optional
 import uvicorn
@@ -56,7 +56,8 @@ def triage_traffic(sample: TrafficSample):
             label="DDoS",
             confidence=0.91,
             severity="CRITICAL",
-            explanation="High packet volume with large byte transfer. Top features: bytes_sent, packets.",
+            explanation="High packet volume with large byte transfer. "
+            "Top features: bytes_sent, packets.",
             recommended_action="Block source IP immediately and escalate to L2."
         )
     elif score > 20:
@@ -64,7 +65,8 @@ def triage_traffic(sample: TrafficSample):
             label="Port Scan",
             confidence=0.78,
             severity="MEDIUM",
-            explanation="Short duration, multiple packets with low byte count. Reconnaissance pattern.",
+            explanation="Short duration, multiple packets with low byte count. "
+            "Reconnaissance pattern.",
             recommended_action="Monitor source IP and add to watchlist."
         )
     else:
