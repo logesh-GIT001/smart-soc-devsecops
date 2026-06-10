@@ -6,7 +6,7 @@ import uvicorn
 app = FastAPI(
     title="Smart-SOC API",
     description="ML-Based Threat Triage with Explainable AI",
-    version="1.0.0"
+    version="1.0.0",
 )
 
 
@@ -33,7 +33,7 @@ def root():
     return {
         "service": "Smart-SOC Threat Triage",
         "status": "operational",
-        "version": "1.0.0"
+        "version": "1.0.0",
     }
 
 
@@ -58,7 +58,7 @@ def triage_traffic(sample: TrafficSample):
             severity="CRITICAL",
             explanation="High packet volume with large byte transfer. "
             "Top features: bytes_sent, packets.",
-            recommended_action="Block source IP immediately and escalate to L2."
+            recommended_action="Block source IP immediately and escalate to L2.",
         )
     elif score > 20:
         return TriageResult(
@@ -67,7 +67,7 @@ def triage_traffic(sample: TrafficSample):
             severity="MEDIUM",
             explanation="Short duration, multiple packets with low byte count. "
             "Reconnaissance pattern.",
-            recommended_action="Monitor source IP and add to watchlist."
+            recommended_action="Monitor source IP and add to watchlist.",
         )
     else:
         return TriageResult(
@@ -75,7 +75,7 @@ def triage_traffic(sample: TrafficSample):
             confidence=0.85,
             severity="LOW",
             explanation="Traffic pattern within normal thresholds.",
-            recommended_action="No action required."
+            recommended_action="No action required.",
         )
 
 

@@ -24,7 +24,7 @@ def test_triage_critical():
         "bytes_sent": 100000,
         "packets": 5000,
         "duration": 0.5,
-        "flags": "SYN"
+        "flags": "SYN",
     }
     response = client.post("/triage", json=payload)
     assert response.status_code == 200
@@ -41,7 +41,7 @@ def test_triage_benign():
         "protocol": "TCP",
         "bytes_sent": 100,
         "packets": 5,
-        "duration": 2.0
+        "duration": 2.0,
     }
     response = client.post("/triage", json=payload)
     assert response.status_code == 200
