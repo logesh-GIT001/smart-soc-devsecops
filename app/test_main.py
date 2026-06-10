@@ -53,4 +53,3 @@ def test_triage_missing_field():
     # Missing required fields — should return 422
     response = client.post("/triage", json={"src_ip": "1.2.3.4"})
     assert response.status_code == 422
-    
