@@ -1,0 +1,244 @@
+name: DevSecOps Pipeline - Smart-SOC
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE_NAME: smart-soc-api
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  lint:
+    name: "Stage 1 - Lint"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install linting tools
+        run: pip install flake8 black
+
+      - name: Run flake8
+        run: flake8 app/ --max-line-length=100 --exclude=__pycache__
+
+      - name: Run black
+        run: black --check app/
+
+  sast:
+    name: "Stage 2 - SAST Scan"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Bandit
+        run: pip install bandit
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r app/ \
+            -f json \
+            -o bandit-report.json \
+            --severity-level medium \
+            --confidence-level medium || true
+
+      - name: Display Bandit summary
+        run: |
+          python3 -c "
+          import json, sys
+          with open('bandit-report.json') as f:
+              report = json.load(f)
+          results = report.get('results', [])
+          print(f'Issues found: {len(results)}')
+          for r in results:
+              print(f\"  [{r['issue_severity']}] {r['issue_text']} - {r['filename']}:{r['line_number']}\")
+          if len(results) > 0:
+              sys.exit(1)
+          print('No medium/high severity issues found.')
+          "
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-security-report
+          path: bandit-report.json
+
+  test:
+    name: "Stage 3 - Unit Tests"
+    runs-on: ubuntu-latest
+    needs: sast
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r app/requirements.txt
+          pip install pytest pytest-cov httpx
+
+      - name: Run tests with coverage
+        run: |
+          cd app
+          pytest test_main.py -v \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --cov-fail-under=70
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: app/coverage.xml
+
+  build:
+    name: "Stage 4 - Docker Build"
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} \
+            --tag ${{ env.IMAGE_NAME }}:latest \
+            .
+
+      - name: Save Docker image as artifact
+        run: docker save ${{ env.IMAGE_NAME }}:latest | gzip > smart-soc-image.tar.gz
+
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: smart-soc-image.tar.gz
+          retention-days: 1
+
+  container-scan:
+    name: "Stage 5 - Trivy Container Scan"
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load < smart-soc-image.tar.gz
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb generic main" | \
+            sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+
+      - name: Run Trivy scan
+        run: |
+          trivy image \
+            --exit-code 0 \
+            --severity HIGH,CRITICAL \
+            --format table \
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Fail on CRITICAL CVEs
+        run: |
+          trivy image \
+            --exit-code 1 \
+            --severity CRITICAL \
+            --ignore-unfixed \
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Generate Trivy JSON report
+        run: |
+          trivy image \
+            --format json \
+            --output trivy-report.json \
+            --severity HIGH,CRITICAL \
+            ${{ env.IMAGE_NAME }}:latest
+
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-security-report
+          path: trivy-report.json
+
+  deploy:
+    name: "Stage 6 - Deploy"
+    runs-on: ubuntu-latest
+    needs: container-scan
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker image
+        run: docker load < smart-soc-image.tar.gz
+
+      - name: Deploy with Docker Compose
+        run: |
+          docker compose up -d
+          echo "Waiting for service to be healthy..."
+          sleep 10
+
+      - name: Smoke test - health endpoint
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          if [ "$STATUS" != "200" ]; then
+            echo "Smoke test FAILED - /health returned $STATUS"
+            docker compose logs
+            exit 1
+          fi
+          echo "Smoke test PASSED - API is live"
+
+      - name: Smoke test - triage endpoint
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8000/triage \
+            -H "Content-Type: application/json" \
+            -d '{"src_ip":"1.2.3.4","dst_ip":"10.0.0.1","protocol":"TCP","bytes_sent":100,"packets":5,"duration":1.0}')
+          echo "Triage response: $RESPONSE"
+          echo $RESPONSE | python3 -c "import sys,json; d=json.load(sys.stdin); assert 'label' in d"
+          echo "Triage endpoint PASSED"
+
+      - name: Deployment summary
+        run: |
+          echo "========================================"
+          echo "  Smart-SOC deployed successfully"
+          echo "  Commit : ${{ github.sha }}"
+          echo "  Branch : ${{ github.ref_name }}"
+          echo "  Actor  : ${{ github.actor }}"
+          echo "========================================"
